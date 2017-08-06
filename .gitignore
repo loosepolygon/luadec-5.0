@@ -1,0 +1,6 @@
+*.vs
+*.filters
+*.user
+*.log
+
+*/Debug/
