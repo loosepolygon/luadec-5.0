@@ -1,5 +1,3 @@
-#include "common.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,19 +9,16 @@
 #include "lopcodes.h"
 #include "lundump.h"
 #include "lstring.h"
+#include "lmem.h"
 
-#include "lua-compat.h"
 #include "StringBuffer.h"
 #include "structs.h"
 #include "proto.h"
-#include "decompile.h"
 
 #define DEBUG_PRINT
 
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define MIN(a,b) (((a)<(b))?(a):(b))
-
-extern lua_State* glstate;
 
 /****************************************
 Lua 5.1
@@ -90,15 +85,30 @@ int op_regusage[] = {
 #define addi(l, i) intArray_Push(&l, i)
 #define add(l, a, b) do{ LocVar lv; lv.startpc=a; lv.endpc=b; LocVarArray_Push(&l, lv); }while(0)
 
-int luaU_guess_locals(Proto* f, int main) {
+#define FUNC_BLOCK_END(f) (f->sizecode - 1)
+#define NEED_ARG(f) (((f->is_vararg == 3) || (f->is_vararg == 7))?1:0)
+#define ISK(x) (x >= MAXSTACK)
+
+int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
+	// List of end PCs
 	intArray blocklist;
+	// Result
 	LocVarArray locallist;
+	// Start PCs for current registers. Locals start at the instruction
+	// *after* they're declared.
 	int regassign[MAXARG_A+1];
+	// Counter of when registers are loaded from, such as the register
+	// that OP_MOVE uses to get its value from
 	int regusage[MAXARG_A+1];
+	// End PCs for current registers. Locals end on the instruction that
+	// their block ends, such as the first instruction after an if/else
+	// block, or on OP_RETURN. (Need to test a bit more)
 	int regblock[MAXARG_A+1];
+	// Next available register slot that's unused
 	int lastfree;
 	int i,i2,x,pc;
 	int func_endpc = FUNC_BLOCK_END(f);
+	// Only used with OP_SETLIST, which looks complex
 	int ignoreNext = 0;
 
 	if (f->lineinfo != NULL) {
@@ -140,7 +150,7 @@ int luaU_guess_locals(Proto* f, int main) {
 		lastfree++;
 	}
 
-#if LUA_VERSION_NUM == 501
+#ifdef OwO
 	// nil optimizations
 	{
 		Instruction i = f->code[0];
@@ -153,14 +163,12 @@ int luaU_guess_locals(Proto* f, int main) {
 		// read Ra only
 		case OP_SETGLOBAL:
 		case OP_SETUPVAL:
-		case OP_TESTSET:
 			num_nil = a;
 			break;
 		// read Rb only
 		case OP_MOVE:
 		case OP_UNM:
 		case OP_NOT:
-		case OP_LEN:
 			if (!ISK(b)) {
 					num_nil = b;
 			}
@@ -173,7 +181,6 @@ int luaU_guess_locals(Proto* f, int main) {
 		case OP_SUB:
 		case OP_MUL:
 		case OP_DIV:
-		case OP_MOD:
 		case OP_POW:
 		case OP_EQ:
 		case OP_LT:
@@ -215,14 +222,20 @@ int luaU_guess_locals(Proto* f, int main) {
 		int c = GETARG_C(instr);
 		int bc = GETARG_Bx(instr);
 		int sbc = GETARG_sBx(instr);
+		// Destination PC for OP_JMPs; it's one greater than the actual dest for some reason. One-indexed?
 		int dest = 0;
+		// These two are the range of registers modified.
 		int setreg = -1;
 		int setregto = -1;
+		// Unused?
 		int setreg2 = -1;
+		// These two are the range of registers read.
 		int loadreg = -1;
+		int loadregto = -1;
+		// These two are extra reads.
 		int loadreg2 = -1;
 		int loadreg3 = -1;
-		int loadregto = -1;
+		// These two force a range to be evaluated as possible locals.
 		int intlocfrom = -1;
 		int intlocto = -1;
 
@@ -231,7 +244,7 @@ int luaU_guess_locals(Proto* f, int main) {
 			continue;
 		}
 
-		if ((o==OP_JMP) || (o==OP_FORPREP)) {
+		if ((o==OP_JMP)) {
 			dest = pc + sbc + 2;
 		} else if ((pc+1!=f->sizecode) && (GET_OPCODE(f->code[pc+1])==OP_JMP)) {
 			dest = pc + 1 + GETARG_sBx(f->code[pc+1]) + 2;
@@ -249,7 +262,6 @@ int luaU_guess_locals(Proto* f, int main) {
 			break;
 		case OP_UNM:
 		case OP_NOT:
-		case OP_LEN:
 			setreg = a;
 			loadreg = b;
 			break;
@@ -262,9 +274,7 @@ int luaU_guess_locals(Proto* f, int main) {
 		case OP_LOADKX:
 #endif
 		case OP_GETUPVAL:
-#if LUA_VERSION_NUM == 501
 		case OP_GETGLOBAL:
-#endif
 #if LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
 		case OP_GETTABUP:
 #endif
@@ -325,7 +335,6 @@ int luaU_guess_locals(Proto* f, int main) {
 		case OP_MUL:
 		case OP_DIV:
 		case OP_POW:
-		case OP_MOD:
 			setreg = a;
 			if (!ISK(b)) {
 				loadreg = b;
@@ -345,19 +354,27 @@ int luaU_guess_locals(Proto* f, int main) {
 			break;
 		case OP_CALL:
 			if (c==0) {
+				// Unknown number of return values.
 				setreg = a;
 				setregto = f->maxstacksize;
 			} else if (c>=2) {
+				// Set range becomes where the return values are stored.
 				setreg = a;
 				setregto = a+c-2;
 			} else if (c==1) {
+				// No return values, intloc range becomes stack start to before the
+				// called function.
 				intlocfrom = 0;
 				intlocto = a-1;
 			}
+			// b is the number of function arguments + 1
 			if (b==0) {
+				// "This form is used when the last expression in the parameter
+				// list is a function call, so the number of actual parameters is indeterminate"
 				loadreg = a;
 				loadregto = f->maxstacksize;
 			} else {
+				// loadreg range becomes the function and all its passed args.
 				loadreg = a;
 				loadregto = a+b-1;
 			}
@@ -378,15 +395,6 @@ int luaU_guess_locals(Proto* f, int main) {
 			} else {
 				loadreg = a;
 				loadregto = a+b-1;
-			}
-			break;
-		case OP_VARARG:
-			if (b==0) {
-				setreg = a;
-				setregto = f->maxstacksize;
-			} else {
-				setreg = a;
-				setregto = a+b-1;
 			}
 			break;
 		case OP_SELF:
@@ -418,10 +426,6 @@ int luaU_guess_locals(Proto* f, int main) {
 		case OP_TEST:
 			loadreg = a;
 			break;
-		case OP_TESTSET: 
-			setreg = a;
-			loadreg = b;
-			break;
 		case OP_SETLIST:
 			loadreg = a;
 			if (b==0) {
@@ -439,48 +443,48 @@ int luaU_guess_locals(Proto* f, int main) {
 #endif
 		case OP_TFORLOOP:
 			break;
-		case OP_FORPREP:
-			loadreg = a;
-			loadregto = a+2;
-			setreg = a;
-			setregto = a+3;
-			intlocfrom = a;
-			intlocto = a+3;
-			regassign[a] = pc;
-			regassign[a+1] = pc;
-			regassign[a+2] = pc;
-			regassign[a+3] = pc+1;
-			regblock[a] = dest;
-			regblock[a+1] = dest;
-			regblock[a+2] = dest;
-			regblock[a+3] = dest-1;
+		//case OP_FORPREP:
+		//	loadreg = a;
+		//	loadregto = a+2;
+		//	setreg = a;
+		//	setregto = a+3;
+		//	intlocfrom = a;
+		//	intlocto = a+3;
+		//	regassign[a] = pc;
+		//	regassign[a+1] = pc;
+		//	regassign[a+2] = pc;
+		//	regassign[a+3] = pc+1;
+		//	regblock[a] = dest;
+		//	regblock[a+1] = dest;
+		//	regblock[a+2] = dest;
+		//	regblock[a+3] = dest-1;
 
-			addi(blocklist, dest-1);
-			if (GET_OPCODE(f->code[dest-2])==OP_JMP) {
-				last(blocklist)--;
-			}
-			break;
+		//	addi(blocklist, dest-1);
+		//	if (GET_OPCODE(f->code[dest-2])==OP_JMP) {
+		//		last(blocklist)--;
+		//	}
+		//	break;
 		case OP_JMP:
-			if (GET_OPCODE(f->code[dest-1]) == LUADEC_TFORLOOP) {
-				int a = GETARG_A(f->code[dest-1]);
-				int c = GETARG_C(f->code[dest-1]);
-				setreg = a;
-				setregto = a+c+2;
-				loadreg = a;
-				loadregto = a+2;
-				intlocfrom = a;
-				intlocto = a+c+2;
-				regassign[a] = pc;
-				regassign[a+1] = pc;
-				regassign[a+2] = pc;
-				regblock[a] = dest+1;
-				regblock[a+1] = dest+1;
-				regblock[a+2] = dest+1;
-				for (x=a+3;x<=a+c+2;x++) {
-					regassign[x] = pc+1;
-					regblock[x] = dest-1;
-				}
-			}
+			//if (GET_OPCODE(f->code[dest-1]) == LUADEC_TFORLOOP) {
+			//	int a = GETARG_A(f->code[dest-1]);
+			//	int c = GETARG_C(f->code[dest-1]);
+			//	setreg = a;
+			//	setregto = a+c+2;
+			//	loadreg = a;
+			//	loadregto = a+2;
+			//	intlocfrom = a;
+			//	intlocto = a+c+2;
+			//	regassign[a] = pc;
+			//	regassign[a+1] = pc;
+			//	regassign[a+2] = pc;
+			//	regblock[a] = dest+1;
+			//	regblock[a+1] = dest+1;
+			//	regblock[a+2] = dest+1;
+			//	for (x=a+3;x<=a+c+2;x++) {
+			//		regassign[x] = pc+1;
+			//		regblock[x] = dest-1;
+			//	}
+			//}
 			if (dest>pc) {
 				addi(blocklist, dest-1);
 				if (GET_OPCODE(f->code[dest-2])==OP_JMP) {
@@ -498,6 +502,7 @@ int luaU_guess_locals(Proto* f, int main) {
 			break;
 		}
 		
+		// Make sure the current list of active blocks is in order (I think?)
 		for (i=1; i<blocklist.size; i++) {
 			x = blocklist.values[i];
 			i2 = i-1;
@@ -527,16 +532,28 @@ int luaU_guess_locals(Proto* f, int main) {
 			if (setreg2!=-1) regusage[setreg2]++;
 		}
 
+		// i2 becomes the highest register that is probably already a local or will be
+		// forced to become one.
+		// * Registers ABOVE i2: store start/end block info for use later
+		// * Registers BELOW or at i2: add locals
 		i2 = lastfree-1;
 		for (i=lastfree; i<f->maxstacksize; i++) {
+			// * Register loaded from more than once: it's a local being referenced.
+			// * Register set to more than once: hard to explain why, but I think
+			//    when registers are used that way, it's a local.
 			if ((regusage[i]<0) || (regusage[i]>1)) {
 				i2 = i;
 			}
+			// * OP_MOVE: i2 may become as high as the register that's modified.
+			// * OP_CALL: If no return values, i2 may become as high as the
+			//    register before the function that's called. I'm not sure know why.
 			if ((intlocfrom!=-1) && ((intlocfrom<=i) && (i<=intlocto))) {
 				i2 = i;
 			}
 		}
 
+		// Set up the start and end PCs for any new locals. This happens BEFORE
+		// the next for loop below, typically in the next instruction.
 		for (i=setreg; i<=setregto; i++) {
 			if (i>i2) {
 				regassign[i] = pc+1;
@@ -544,18 +561,27 @@ int luaU_guess_locals(Proto* f, int main) {
 			}
 		}
 
+		// If the bytecode says to set a register that's greater than lastfree,
+		// it means any register before that is a local.
 		for (i=lastfree; i<=i2; i++) {
 			//fprintf(stderr,"%d %d %d %d\n",i,regassign[i],regblock[i],block);
 			add(locallist,regassign[i],regblock[i]);
 			lastfree++;
 		}
 
+		// Remove any blocks we exited from the list
 		while (blocklist.size > 0 && last(blocklist) <= pc+1) {
 			intArray_Pop(&blocklist);
 		}
+		
+		// ???? This always happens, TWICE even
 		if (blocklist.size == 0) {
-			fprintf(stderr, "cannot find blockend > %d , pc = %d, f->sizecode = %d\n", pc+1, pc, f->sizecode);
+			fprintf(stderr, "cannot find blockend > %d , pc = %d, f->sizecode = %d\n", pc + 1, pc, f->sizecode);
 		}
+
+		// Roll back lastfree when we exit a block (aka scope). The locals have
+		// already been added, but lastfree is rolled back so we can add more in
+		// those register slots.
 		while ((lastfree!=0) && (regblock[lastfree-1] <= pc+1)) {
 			lastfree--;
 			regusage[lastfree]=0;
@@ -568,11 +594,11 @@ int luaU_guess_locals(Proto* f, int main) {
 		int length = locallist.size;
 		f->sizelocvars = length;
 		if (f->sizelocvars>0) {
-			f->locvars = luaM_newvector(glstate,f->sizelocvars,LocVar);
+			f->locvars = luaM_newvector(luaState,f->sizelocvars,LocVar);
 			for (i = 0; i < length; i++) {
 				char names[10];
 				sprintf(names,"l_%d_%d",main,i);
-				f->locvars[i].varname = luaS_new(glstate, names);
+				f->locvars[i].varname = luaS_new(luaState, names);
 				f->locvars[i].startpc = locallist.values[i].startpc;
 				f->locvars[i].endpc = locallist.values[i].endpc;
 			}
@@ -582,7 +608,7 @@ int luaU_guess_locals(Proto* f, int main) {
 
 	// run with all functions
 	for (i=0; i<f->sizep; i++) {
-		luaU_guess_locals(f->p[i],main+i+1);
+		luaU_guess_locals(luaState, f->p[i],main+i+1);
 	}
 	return 1;
 }

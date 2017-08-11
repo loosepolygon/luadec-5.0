@@ -33,6 +33,7 @@ static const char* progname=PROGNAME;	/* actual program name */
 
 void luaU_decompile(const Proto * f, int lflag);
 void luaU_decompileFunctions(const Proto * f, int lflag);
+int luaU_guess_locals(lua_State* luaState, Proto * f, int main);
 
 static void fatal(const char* message)
 {
@@ -160,6 +161,9 @@ int main(int argc, char* argv[])
   if (luaL_loadfile(L,filename)!=0) fatal(lua_tostring(L,-1));
  }
  f=combine(L,argc);
+
+ luaU_guess_locals(L, f, 0);
+
  if (functions)
     luaU_decompileFunctions(f, debugging);
  else
