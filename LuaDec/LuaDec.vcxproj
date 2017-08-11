@@ -144,7 +144,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\guess.c">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="src\luadec.c" />
+    <ClCompile Include="src\macro-array.c" />
     <ClCompile Include="src\output.c" />
     <ClCompile Include="src\print.c" />
     <ClCompile Include="src\proto.c" />
