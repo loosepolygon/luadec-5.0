@@ -20,59 +20,6 @@
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
-/****************************************
-Lua 5.1
-opmode = {
-	[0]=iABC,iABx,iABC,iABC,iABC,
-	iABx,iABC,iABx,iABC,iABC,
-	iABC,iABC,iABC,iABC,iABC,
-	iABC,iABC,iABC,iABC,iABC,
-	iABC,iABC,iAsBx,iABC,iABC,
-	iABC,iABC,iABC,iABC,iABC,
-	iABC,iAsBx,iAsBx,iABC,iABC,
-	iABC,iABx,iABC
-}
-
-op = [[
-	MOVE LOADK LOADBOOL LOADNIL GETUPVAL
-	GETGLOBAL GETTABLE SETGLOBAL SETUPVAL SETTABLE
-	NEWTABLE SELF ADD SUB MUL
-	DIV MOD POW UNM NOT
-	LEN CONCAT JMP EQ LT
-	LE TEST TESTSET CALL TAILCALL
-	RETURN FORLOOP FORPREP TFORLOOP SETLIST 
-	CLOSE CLOSURE VARARG
-]]
-****************************************/
-
-// 0100 = assign Ra
-// 0010 = assign Rb
-// 0001 = assign Rc
-int op_regassign[] = {
-	0100,0100,0100,0100,0000,
-	0100,0100,0000,0000,0000,
-	0100,0000,0100,0100,0100,
-	0100,0100,0100,0100,0100,
-	0100,0100,0000,0000,0000,
-	0000,0100,0010,0000,0000,
-	0000,0000,0100,0000,0000,
-	0000,0100,0000
-};
-
-// 0100 = use Ra
-// 0010 = use Rb
-// 0001 = use Rc
-int op_regusage[] = {
-	0010,0000,0000,0000,0000,
-	0000,0011,0100,0100,0011,
-	0000,0011,0011,0011,0011,
-	0011,0011,0011,0010,0010,
-	0010,0000,0000,0011,0011,
-	0011,0000,0100,0000,0000,
-	0000,0000,0000,0000,0000,
-	0000,0100,0000
-};
-
 #define T int
 #include "macro-array.h"
 #undef T
@@ -270,14 +217,8 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			setregto = b;
 			break;
 		case OP_LOADK:
-#if LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
-		case OP_LOADKX:
-#endif
 		case OP_GETUPVAL:
 		case OP_GETGLOBAL:
-#if LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
-		case OP_GETTABUP:
-#endif
 		case OP_LOADBOOL:
 		case OP_NEWTABLE:
 		case OP_CLOSURE:
@@ -290,26 +231,10 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 				loadreg2 = c;
 			}
 			break;
-#if LUA_VERSION_NUM == 501
 		case OP_SETGLOBAL:
-#endif
 		case OP_SETUPVAL:
 			loadreg = a;
 			break;
-#if LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
-		case OP_SETTABUP:
-			if (!ISK(b)) {
-				loadreg2 = b;
-			}
-			if (!ISK(c)) {
-				if (loadreg2==-1) {
-					loadreg2 = c;
-				} else {
-					loadreg3 = c;
-				}
-			}
-			break;
-#endif
 		case OP_SETTABLE:
 			loadreg = a;
 			if (!ISK(b)) {
@@ -424,9 +349,11 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			}
 			break;
 		case OP_TEST:
+			// TODO: This changed between 5.0 and 5.1
 			loadreg = a;
 			break;
 		case OP_SETLIST:
+			// TODO: OP_SETLISTO split
 			loadreg = a;
 			if (b==0) {
 				loadregto = f->maxstacksize;
@@ -438,11 +365,9 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			}
 			break;
 		case OP_FORLOOP:
-#if LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
-		case OP_TFORCALL:
-#endif
 		case OP_TFORLOOP:
 			break;
+		// TODO: OP_TFORPREP
 		//case OP_FORPREP:
 		//	loadreg = a;
 		//	loadregto = a+2;
@@ -487,17 +412,13 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			//}
 			if (dest>pc) {
 				addi(blocklist, dest-1);
+				// This is true for an if/else statement
 				if (GET_OPCODE(f->code[dest-2])==OP_JMP) {
 					last(blocklist)--;
 				}
 			}
 			break;
-#if LUA_VERSION_NUM == 501
 		case OP_CLOSE:
-#endif
-#if LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
-		case OP_EXTRAARG:
-#endif
 		default:
 			break;
 		}
@@ -556,6 +477,10 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		// the next for loop below, typically in the next instruction.
 		for (i=setreg; i<=setregto; i++) {
 			if (i>i2) {
+				if (blocklist.size == 0) {
+					fprintf(stderr, "cannot find blockend, pc = %d, f->sizecode = %d\n", pc, f->sizecode);
+				}
+
 				regassign[i] = pc+1;
 				regblock[i] = last(blocklist);
 			}
@@ -572,11 +497,6 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		// Remove any blocks we exited from the list
 		while (blocklist.size > 0 && last(blocklist) <= pc+1) {
 			intArray_Pop(&blocklist);
-		}
-		
-		// ???? This always happens, TWICE even
-		if (blocklist.size == 0) {
-			fprintf(stderr, "cannot find blockend > %d , pc = %d, f->sizecode = %d\n", pc + 1, pc, f->sizecode);
 		}
 
 		// Roll back lastfree when we exit a block (aka scope). The locals have
