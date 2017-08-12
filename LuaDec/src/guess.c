@@ -351,6 +351,8 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		case OP_TEST:
 			// TODO: This changed between 5.0 and 5.1
 			loadreg = a;
+			setreg = a;
+			loadreg = b;
 			break;
 		case OP_SETLIST:
 			// TODO: OP_SETLISTO split
