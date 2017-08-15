@@ -38,6 +38,16 @@ struct VarStack_ {
    int ctr;
 };
 
+typedef struct LocalData_ LocalData;
+
+struct LocalData_ {
+	int startpc;
+	int endpc;
+	// Used for closure upvalues
+	int reg;
+	char name[20];
+};
+
 void InitList(List* list);
 void AddToList(List* list, ListItem* item);
 ListItem* LastItem(List* list);

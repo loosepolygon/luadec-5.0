@@ -24,13 +24,12 @@
 #include "macro-array.h"
 #undef T
 
-#define T LocVar
+#define T LocalData
 #include "macro-array.h"
 #undef T
 
 #define last(l) (l.values[l.size-1])
 #define addi(l, i) intArray_Push(&l, i)
-#define add(l, a, b) do{ LocVar lv; lv.startpc=a; lv.endpc=b; LocVarArray_Push(&l, lv); }while(0)
 
 #define FUNC_BLOCK_END(f) (f->sizecode - 1)
 #define NEED_ARG(f) (((f->is_vararg == 3) || (f->is_vararg == 7))?1:0)
@@ -40,7 +39,7 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 	// List of end PCs
 	intArray blocklist;
 	// Result
-	LocVarArray locallist;
+	LocalDataArray localList;
 	// Start PCs for current registers. Locals start at the instruction
 	// *after* they're declared.
 	int regassign[MAXARG_A+1];
@@ -57,6 +56,9 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 	int func_endpc = FUNC_BLOCK_END(f);
 	// Only used with OP_SETLIST, which looks complex
 	int ignoreNext = 0;
+	// These two are for assigning upvalues to closures
+	int currentClosureIndex = -1;
+	int upvaluesToEat = -1;
 
 	if (f->lineinfo != NULL) {
 		return 0;
@@ -66,10 +68,14 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		return 0;
 	}
 
+	if (f->sizeupvalues > 0) {
+		return 0;
+	}
+
 	intArray_Init(&blocklist, MAXARG_A+1);
 	addi(blocklist, func_endpc);
 
-	LocVarArray_Init(&locallist, MAXARG_A+1);
+	LocalDataArray_Init(&localList, MAXARG_A+1);
 
 	lastfree = 0;
 	for (i=0; i<f->maxstacksize; i++) {
@@ -80,20 +86,29 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 
 	// parameters
 	for (i = 0; i < f->numparams; i++) {
-		add(locallist,0,func_endpc);
 		regassign[lastfree] = 0;
 		regusage[lastfree] = 1;
 		regblock[lastfree] = func_endpc;
+
+		LocalData local;
+		local.startpc = 0;
+		local.endpc = func_endpc;
+		local.reg = i;
+		sprintf(local.name, "l_%d_arg%d", main, i);
+		LocalDataArray_Push(&localList, local);
+
 		lastfree++;
 	}
 
 	// vararg
 	if (NEED_ARG(f)) {
-		add(locallist,0,func_endpc);
-		lastfree++;
-		regassign[lastfree] = 0;
-		regusage[lastfree] = 1;
-		regblock[lastfree] = func_endpc;
+		LocalData local;
+		local.startpc = 0;
+		local.endpc = func_endpc;
+		local.reg = i;
+		sprintf(local.name, "l_%d_vararg%d", main, i);
+		LocalDataArray_Push(&localList, local);
+
 		lastfree++;
 	}
 
@@ -200,6 +215,12 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		// check which registers were read or written to.
 		switch (o) {
 		case OP_MOVE:
+			if (upvaluesToEat > 0) {
+				intlocfrom = b;
+				intlocto = b;
+				break;
+			}
+
 			setreg = a;
 			if (b<=a) {
 				intlocfrom = b;
@@ -221,7 +242,6 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		case OP_GETGLOBAL:
 		case OP_LOADBOOL:
 		case OP_NEWTABLE:
-		case OP_CLOSURE:
 			setreg = a;
 			break;
 		case OP_GETTABLE:
@@ -421,6 +441,18 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			}
 			break;
 		case OP_CLOSE:
+			break;
+		case OP_CLOSURE:
+			setreg = a;
+
+			++currentClosureIndex;
+			Proto* f2 = f->p[currentClosureIndex];
+			upvaluesToEat = f2->nups;
+
+			f2->sizeupvalues = f2->nups;
+			f2->upvalues = luaM_newvector(luaState, f2->sizeupvalues, TString*);
+
+			break;
 		default:
 			break;
 		}
@@ -491,9 +523,23 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		// If the bytecode says to set a register that's greater than lastfree,
 		// it means any register before that is a local.
 		for (i=lastfree; i<=i2; i++) {
-			//fprintf(stderr,"%d %d %d %d\n",i,regassign[i],regblock[i],block);
-			add(locallist,regassign[i],regblock[i]);
+			LocalData local;
+			local.startpc = regassign[i];
+			local.endpc = regblock[i];
+			local.reg = i;
+			sprintf(local.name, "l_%d_%d", main, i);
+			LocalDataArray_Push(&localList, local);
+
 			lastfree++;
+		}
+
+		if (upvaluesToEat > 0 && o != OP_CLOSURE) {
+			Proto* f2 = f->p[currentClosureIndex];
+
+			char* name = last(localList).name;
+			f2->upvalues[f2->nups - upvaluesToEat] = luaS_new(luaState, name);
+
+			--upvaluesToEat;
 		}
 
 		// Remove any blocks we exited from the list
@@ -513,20 +559,19 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 
 	// print out information
 	{
-		int length = locallist.size;
+		int length = localList.size;
 		f->sizelocvars = length;
 		if (f->sizelocvars>0) {
 			f->locvars = luaM_newvector(luaState,f->sizelocvars,LocVar);
 			for (i = 0; i < length; i++) {
-				char names[10];
-				sprintf(names,"l_%d_%d",main,i);
-				f->locvars[i].varname = luaS_new(luaState, names);
-				f->locvars[i].startpc = locallist.values[i].startpc;
-				f->locvars[i].endpc = locallist.values[i].endpc;
+				LocalData local = localList.values[i];
+				f->locvars[i].varname = luaS_new(luaState, local.name);
+				f->locvars[i].startpc = local.startpc;
+				f->locvars[i].endpc = local.endpc;
 			}
 		}
 	}
-	LocVarArray_Clear(&locallist);
+	LocalDataArray_Clear(&localList);
 
 	// run with all functions
 	for (i=0; i<f->sizep; i++) {
