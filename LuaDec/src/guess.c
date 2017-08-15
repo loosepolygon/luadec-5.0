@@ -68,10 +68,6 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		return 0;
 	}
 
-	if (f->sizeupvalues > 0) {
-		return 0;
-	}
-
 	intArray_Init(&blocklist, MAXARG_A+1);
 	addi(blocklist, func_endpc);
 
