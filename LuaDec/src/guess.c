@@ -365,8 +365,6 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			}
 			break;
 		case OP_TEST:
-			// TODO: This changed between 5.0 and 5.1
-			loadreg = a;
 			setreg = a;
 			loadreg = b;
 			break;
