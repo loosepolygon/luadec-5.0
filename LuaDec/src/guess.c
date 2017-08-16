@@ -370,12 +370,12 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			break;
 		case OP_SETLIST:
 			loadreg = a + 1;
-			int count = 1 + bc % LFIELDS_PER_FLUSH;
-			loadregto = a + count;
+			loadregto = a + 1 + bc % LFIELDS_PER_FLUSH;
 
 			break;
 		case OP_SETLISTO:
-			// TODO: this
+			loadreg = a + 1;
+			loadregto = f->maxstacksize;
 
 			break;
 		case OP_FORLOOP:
