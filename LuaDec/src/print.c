@@ -1005,14 +1005,30 @@ void DeclareLocals(Function * F)
             internalLocals++;
             continue;
          }
-         if (PENDING(r)) {
-            if (locals > 0) {
-               StringBuffer_add(str, ", ");
-               StringBuffer_add(rhs, ", ");
-            }
-            StringBuffer_add(str, LOCAL(i));
-            StringBuffer_add(rhs, GetR(F, r));
-            if (error) return;
+		 int waitTable = 0;
+		 if (PENDING(r) && IS_TABLE(r)) {
+			 DecTable *tbl = (DecTable *)FindInList(
+				 &(F->tables),
+				 (ListItemCmpFn)MatchTable,
+				 &r
+			 );
+			 if (tbl->arraySize-1 > 0 || tbl->keyedSize-1 > 0) {
+				 waitTable = 1;
+			 }
+		 }
+		 if (PENDING(r)) {
+			 if (locals > 0) {
+				 StringBuffer_add(str, ", ");
+				 StringBuffer_add(rhs, ", ");
+			 }
+			 StringBuffer_add(str, LOCAL(i));
+			 if (waitTable) {
+				 StringBuffer_prune(rhs);
+			 }
+			 else {
+				 StringBuffer_add(rhs, GetR(F, r));
+			 }
+			 if (error) return;
          } else {
             if (!(locals > 0)) {
                SET_ERROR("Confused at declaration of local variable");
@@ -1023,7 +1039,7 @@ void DeclareLocals(Function * F)
          }
          CALL(r) = 0;
          IS_VARIABLE(r) = 1;
-         names[r] = LOCAL(i);
+		 names[r] = LOCAL(i);
          locals++;
       }
    }
