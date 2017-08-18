@@ -1357,7 +1357,7 @@ char* ProcessCode(const Proto * f, int indent)
          }
       case OP_LOADBOOL:
          {
-            if (F->nextBool == 0) {
+            if (F->nextBool == 0 || c == 0) {
                /*
                 * assign boolean constant
                 */ 

@@ -365,8 +365,14 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			}
 			break;
 		case OP_TEST:
-			setreg = a;
-			loadreg = b;
+			if (a == b) {
+				// I think this always happens inside an if statement
+				loadreg = b;
+			}
+			else {
+				setreg = a;
+				loadreg = b;
+			}
 			break;
 		case OP_SETLIST:
 			loadreg = a + 1;
