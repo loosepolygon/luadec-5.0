@@ -534,7 +534,15 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 		if (upvaluesToEat > 0 && o != OP_CLOSURE) {
 			Proto* f2 = f->p[currentClosureIndex];
 
-			char* name = last(localList).name;
+			int localIndex = -1;
+			for (i = lastfree; i --> 0;) {
+				if (localList.values[i].reg == b) {
+					localIndex = i;
+					break;
+				}
+			}
+
+			char* name = localList.values[i].name;
 			f2->upvalues[f2->nups - upvaluesToEat] = luaS_new(luaState, name);
 
 			--upvaluesToEat;
