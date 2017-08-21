@@ -1567,6 +1567,11 @@ char* ProcessCode(const Proto * f, int indent)
          }
       case OP_JMP:
          {
+            if (GET_OPCODE(code[pc - 1]) == OP_JMP) {
+               // Empty if/else block
+               FlushBoolean(F);
+            }
+
             int dest = sbc + pc + 2;
             Instruction idest = code[dest - 1];
             if (boolpending) {
