@@ -13,12 +13,14 @@ struct BoolOp_ {
    int neg;
    int pc;
    int dest;
+   int indent;
 };
 
 typedef struct Endif_ Endif;
 
 struct Endif_ {
    int addr;
+   int indent;
    Endif* next;
 };
 

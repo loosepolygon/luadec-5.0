@@ -387,11 +387,12 @@ char* OutputBoolean(Function* F, int* endif, int test) {
    return result;
 }
 
-void StoreEndifAddr(Function * F, int addr) {
+void StoreEndifAddr(Function * F, int addr, int boolIndent) {
    Endif* at = F->nextEndif;
    Endif* prev = NULL;
    Endif* newEndif = malloc(sizeof(Endif));
    newEndif->addr = addr;
+   newEndif->indent = boolIndent;
    while (at && at->addr < addr) {
       prev = at;
       at = at->next;
@@ -515,6 +516,7 @@ void FlushBoolean(Function * F) {
       char* test;
       int endif;
       int thenaddr;
+      int boolIndent = F->bools[0]->indent;
       StringBuffer* str = StringBuffer_new(NULL);
       LogicExp* exp = MakeBoolean(F, &endif, &thenaddr);
       if (error) return;
@@ -531,7 +533,7 @@ void FlushBoolean(Function * F) {
       } else {
          test = WriteBoolean(exp, &thenaddr, &endif, 0);
          if (error) return;
-         StoreEndifAddr(F, endif);
+         StoreEndifAddr(F, endif, boolIndent);
          StringBuffer_addPrintf(str, "if %s then", test);
          F->elseWritten = 0;
          RawAddStatement(F, str);
@@ -558,6 +560,7 @@ void FlushElse(Function* F) {
    if (F->elsePending > 0) {
       StringBuffer* str = StringBuffer_new(NULL);
       int fpc = F->bools[0]->pc;
+      int boolIndent = F->bools[0]->indent;
       /* Should elseStart be a stack? */
       if (F->nextBool > 0 && (fpc == F->elseStart || fpc-1 == F->elseStart)) {
          char* test;
@@ -568,7 +571,7 @@ void FlushElse(Function* F) {
          if (error) return;
          test = WriteBoolean(exp, &thenaddr, &endif, 0);
          if (error) return;
-         StoreEndifAddr(F, endif);
+         StoreEndifAddr(F, endif, boolIndent);
          StringBuffer_addPrintf(str, "elseif %s then", test);
          F->elseWritten = 0;
          RawAddStatement(F, str);
@@ -579,7 +582,7 @@ void FlushElse(Function* F) {
          /* this test circumvents jump-to-jump optimization at
             the end of if blocks */
          if (!PeekEndifAddr(F, F->pc + 3))
-            StoreEndifAddr(F, F->elsePending);
+            StoreEndifAddr(F, F->elsePending, boolIndent);
          F->indent++;
          F->elseWritten = 1;
       }
@@ -1309,13 +1312,23 @@ char* ProcessCode(const Proto * f, int indent)
          StringBuffer_prune(str);
       }
       
-      while (GetEndifAddr(F, pc+1)) {
+      while (PeekEndifAddr(F, pc+1)) {
+         if (F->nextEndif->indent != F->indent - 1) {
+            StringBuffer_set(str, "-- Tried to add an 'end' here but it's incorrect");
+            TRY(AddStatement(F, str));
+            StringBuffer_prune(str);
+
+            GetEndifAddr(F, pc + 1);
+            continue;
+         }
          StringBuffer_set(str, "end");
          F->elseWritten = 0;
          F->elsePending = 0;
          F->indent--;
          TRY(AddStatement(F, str));
          StringBuffer_prune(str);
+
+         GetEndifAddr(F, pc+1);
       }
 
       while (RemoveFromSet(F->repeats, F->pc+1)) {
@@ -1676,6 +1689,7 @@ char* ProcessCode(const Proto * f, int indent)
                F->bools[F->nextBool]->op = OP_TEST;
                F->bools[F->nextBool]->neg = c;
                F->bools[F->nextBool]->pc = pc + 3;
+               F->bools[F->nextBool]->pc = F->indent;
                F->testpending = a+1;
                F->bools[F->nextBool]->dest = dest;
                F->nextBool++;
@@ -1739,6 +1753,7 @@ char* ProcessCode(const Proto * f, int indent)
             F->bools[F->nextBool]->op = o;
             F->bools[F->nextBool]->neg = a;
             F->bools[F->nextBool]->pc = pc + 1;
+            F->bools[F->nextBool]->indent = F->indent;
             boolpending = 1;
             break;
          }
@@ -1763,6 +1778,7 @@ char* ProcessCode(const Proto * f, int indent)
             F->bools[F->nextBool]->op = o;
             F->bools[F->nextBool]->neg = c;
             F->bools[F->nextBool]->pc = pc + 1;
+            F->bools[F->nextBool]->indent = F->indent;
             // Within an IF, a and b are the same, avoiding side-effects
             if (a != b || !IS_VARIABLE(a)) {
                F->testpending = a+1;
