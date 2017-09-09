@@ -20,6 +20,7 @@ typedef struct Endif_ Endif;
 
 struct Endif_ {
    int addr;
+   int origin;
    int indent;
    Endif* next;
 };
@@ -31,7 +32,9 @@ struct Statement_ {
    char *code;
    int line;
    int indent;
-   int backpatch;
+   int backpatchWhile;
+   int backpatchElse;
+   int isIfStatement;
 };
 
 typedef struct Function_ Function;

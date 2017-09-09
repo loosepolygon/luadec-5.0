@@ -387,12 +387,13 @@ char* OutputBoolean(Function* F, int* endif, int test) {
    return result;
 }
 
-void StoreEndifAddr(Function * F, int addr, int boolIndent) {
+void StoreEndifAddr(Function * F, int addr, int origin, int boolIndent) {
    Endif* at = F->nextEndif;
    Endif* prev = NULL;
    Endif* newEndif = malloc(sizeof(Endif));
    newEndif->addr = addr;
    newEndif->indent = boolIndent;
+   newEndif->origin = origin;
    while (at && at->addr < addr) {
       prev = at;
       at = at->next;
@@ -447,18 +448,57 @@ int GetEndifAddr(Function* F, int addr) {
    return 0;
 }
 
-void BackpatchStatement(Function * F, char * code, int line) {
+void BackpatchWhile(Function * F, char * code, int line) {
    ListItem *walk = F->statements.head;
    while (walk) {
       Statement* stmt = (Statement*) walk;
       walk = walk->next;
-      if (stmt->backpatch && stmt->line == line) {
+      if (stmt->backpatchWhile && stmt->line == line) {
          free(stmt->code);
          stmt->code = code;
          return;
       }
    }
    SET_ERROR("Confused while interpreting a jump as a 'while'");
+}
+
+int BackpatchElse(Function * F, int indent) {
+   int success = 0;
+   ListItem *walk = F->statements.head;
+   ListItem *prev;
+   while (walk) {
+      Statement* stmt = (Statement*)walk;
+      walk = walk->next;
+      if (success) {
+         stmt->indent--;
+      }else if (stmt->backpatchElse && stmt->indent == indent) {
+         Statement* ifStatement = (Statement*)walk;
+         stmt->backpatchElse = 0;
+         if (!ifStatement->isIfStatement) {
+            continue;
+         }
+         success = 1;
+         F->indent--;
+         // Cut out the else and edit the if statement below it.
+         prev->next = walk;
+         DeleteStatement(stmt, 0);
+         StringBuffer* str = StringBuffer_new(NULL);
+         StringBuffer_printf(str, "%s%s", "else", ifStatement->code);
+         free(ifStatement->code);
+         ifStatement->code = StringBuffer_getBuffer(str);
+         // Fix up endif stack
+         Endif* walkEndif = F->nextEndif;
+         while (walkEndif) {
+            if (walkEndif->origin >= ifStatement->line) {
+               walkEndif->indent--;
+            }
+            walkEndif = walkEndif->next;
+         }
+      }
+      prev = stmt;
+   }
+
+   return success;
 }
 
 void RawAddStatement(Function * F, StringBuffer * str)
@@ -525,7 +565,7 @@ void FlushBoolean(Function * F) {
          if (error) return;
          StringBuffer_printf(str, "while %s do", test);
          /* verify this '- 2' */
-         BackpatchStatement(F, StringBuffer_getBuffer(str), endif - 2);
+         BackpatchWhile(F, StringBuffer_getBuffer(str), endif - 2);
          if (error) return;
          F->indent--;
          StringBuffer_add(str, "end");
@@ -533,10 +573,13 @@ void FlushBoolean(Function * F) {
       } else {
          test = WriteBoolean(exp, &thenaddr, &endif, 0);
          if (error) return;
-         StoreEndifAddr(F, endif, boolIndent);
+         StoreEndifAddr(F, endif, F->bools[0]->pc, boolIndent);
          StringBuffer_addPrintf(str, "if %s then", test);
          F->elseWritten = 0;
          RawAddStatement(F, str);
+         Statement* stmt = (Statement*)LastItem(&(F->statements));
+         stmt->isIfStatement = 1;
+
          F->indent++;
       }
       StringBuffer_delete(str);
@@ -551,16 +594,15 @@ void AddStatement(Function * F, StringBuffer * str)
    RawAddStatement(F, str);
 }
 
-void MarkBackpatch(Function* F) {
-   Statement* stmt = (Statement*) LastItem(&(F->statements));
-   stmt->backpatch = 1;
-}
-
 void FlushElse(Function* F) {
    if (F->elsePending > 0) {
       StringBuffer* str = StringBuffer_new(NULL);
       int fpc = F->bools[0]->pc;
       int boolIndent = F->bools[0]->indent;
+      int origin = F->pc;
+      if (F->nextBool > 0) {
+         origin = F->bools[0]->pc;
+      }
       /* Should elseStart be a stack? */
       if (F->nextBool > 0 && (fpc == F->elseStart || fpc-1 == F->elseStart)) {
          char* test;
@@ -571,7 +613,7 @@ void FlushElse(Function* F) {
          if (error) return;
          test = WriteBoolean(exp, &thenaddr, &endif, 0);
          if (error) return;
-         StoreEndifAddr(F, endif, boolIndent);
+         StoreEndifAddr(F, endif, origin, boolIndent);
          StringBuffer_addPrintf(str, "elseif %s then", test);
          F->elseWritten = 0;
          RawAddStatement(F, str);
@@ -579,10 +621,13 @@ void FlushElse(Function* F) {
       } else {
          StringBuffer_printf(str, "else");
          RawAddStatement(F, str);
+         Statement* stmt = (Statement*)LastItem(&(F->statements));
+         stmt->backpatchElse = 1;
          /* this test circumvents jump-to-jump optimization at
             the end of if blocks */
-         if (!PeekEndifAddr(F, F->pc + 3))
-            StoreEndifAddr(F, F->elsePending, boolIndent);
+         if (!PeekEndifAddr(F, F->pc + 3)) {
+            StoreEndifAddr(F, F->elsePending, origin, boolIndent);
+         }
          F->indent++;
          F->elseWritten = 1;
       }
@@ -1313,20 +1358,20 @@ char* ProcessCode(const Proto * f, int indent)
       }
       
       while (PeekEndifAddr(F, pc+1)) {
-         if (F->nextEndif->indent != F->indent - 1) {
+         if (BackpatchElse(F, F->nextEndif->indent)) {
+            
+         } else if (F->nextEndif->indent != F->indent - 1) {
             StringBuffer_set(str, "-- Tried to add an 'end' here but it's incorrect");
             TRY(AddStatement(F, str));
             StringBuffer_prune(str);
-
-            GetEndifAddr(F, pc + 1);
-            continue;
+         } else {
+            StringBuffer_set(str, "end");
+            F->elseWritten = 0;
+            F->elsePending = 0;
+            F->indent--;
+            TRY(AddStatement(F, str));
+            StringBuffer_prune(str);
          }
-         StringBuffer_set(str, "end");
-         F->elseWritten = 0;
-         F->elsePending = 0;
-         F->indent--;
-         TRY(AddStatement(F, str));
-         StringBuffer_prune(str);
 
          GetEndifAddr(F, pc+1);
       }
@@ -1671,7 +1716,8 @@ char* ProcessCode(const Proto * f, int indent)
             } else if (PeekSet(F->whiles, pc)) {
                StringBuffer_printf(str, "while 1 do");
                TRY(AddStatement(F, str));
-               MarkBackpatch(F);
+               Statement* stmt = (Statement*)LastItem(&(F->statements));
+               stmt->backpatchWhile = 1;
                F->indent++;
             } else if (RemoveFromSet(F->whiles, dest - 2)) {
                F->indent--;
