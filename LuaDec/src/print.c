@@ -626,7 +626,7 @@ void FlushElse(Function* F) {
          /* this test circumvents jump-to-jump optimization at
             the end of if blocks */
          if (!PeekEndifAddr(F, F->pc + 3)) {
-            StoreEndifAddr(F, F->elsePending, origin, boolIndent);
+            StoreEndifAddr(F, F->elsePending, origin, stmt->indent);
          }
          F->indent++;
          F->elseWritten = 1;
@@ -1361,9 +1361,12 @@ char* ProcessCode(const Proto * f, int indent)
          if (BackpatchElse(F, F->nextEndif->indent)) {
             
          } else if (F->nextEndif->indent != F->indent - 1) {
+            char *copy;
+            Statement *stmt;
             StringBuffer_set(str, "-- Tried to add an 'end' here but it's incorrect");
-            TRY(AddStatement(F, str));
-            StringBuffer_prune(str);
+            copy = StringBuffer_getCopy(str);
+            stmt = NewStatement(copy, F->pc, F->indent);
+            AddToList(&(F->statements), (ListItem *)stmt);
          } else {
             StringBuffer_set(str, "end");
             F->elseWritten = 0;
