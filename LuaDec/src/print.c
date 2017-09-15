@@ -621,15 +621,21 @@ void FlushElse(Function* F) {
       } else {
          StringBuffer_printf(str, "else");
          RawAddStatement(F, str);
-         Statement* stmt = (Statement*)LastItem(&(F->statements));
-         stmt->backpatchElse = 1;
-         /* this test circumvents jump-to-jump optimization at
-            the end of if blocks */
-         if (!PeekEndifAddr(F, F->pc + 3)) {
-            StoreEndifAddr(F, F->elsePending, origin, stmt->indent);
+         if (F->elsePending == F->elseStart) {
+            // Empty else statement
+            StringBuffer_printf(str, "end");
+            RawAddStatement(F, str);
+         } else {
+            Statement* stmt = (Statement*)LastItem(&(F->statements));
+            stmt->backpatchElse = 1;
+            /* this test circumvents jump-to-jump optimization at
+               the end of if blocks */
+            if (GET_OPCODE(F->f->code[F->pc]) != OP_JMP || !PeekEndifAddr(F, F->pc + 3)) {
+               StoreEndifAddr(F, F->elsePending, origin, stmt->indent);
+            }
+            F->elseWritten = 1;
          }
          F->indent++;
-         F->elseWritten = 1;
       }
       F->elsePending = 0;
       F->elseStart = 0;
