@@ -35,6 +35,7 @@ struct Statement_ {
    int backpatchWhile;
    int backpatchElse;
    int isIfStatement;
+   int newLocalTable;
 };
 
 typedef struct Function_ Function;

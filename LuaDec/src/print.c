@@ -175,6 +175,10 @@ void TieAsSubExp(LogicExp* parent, LogicExp* item) {
    }
 }
 
+int MatchPrevItem(ListItem* a, ListItem* b) {
+   return a->next == b;
+}
+
 LogicExp* MakeBoolean(Function * F, int* endif, int* thenaddr)
 {
    int i;
@@ -1050,6 +1054,7 @@ void DeclareLocals(Function * F)
    str = StringBuffer_new("local ");
    rhs = StringBuffer_new(" = ");
    locals = 0;
+   int waitTable = 0;
    for (i = 0; i < F->f->sizelocvars; i++) {
       if (F->f->locvars[i].startpc == F->pc) {
          int r = F->freeLocal + locals + internalLocals;
@@ -1059,7 +1064,7 @@ void DeclareLocals(Function * F)
             internalLocals++;
             continue;
          }
-		 int waitTable = 0;
+		 waitTable = 0;
 		 if (PENDING(r) && IS_TABLE(r)) {
 			 DecTable *tbl = (DecTable *)FindInList(
 				 &(F->tables),
@@ -1100,6 +1105,10 @@ void DeclareLocals(Function * F)
    if (locals > 0) {
       StringBuffer_add(str, StringBuffer_getRef(rhs));
       AddStatement(F, str);
+      if (waitTable) {
+         Statement* lastStmt = (Statement*)LastItem(&(F->statements));
+         lastStmt->newLocalTable = 1;
+      }
       if (error) return;
    }
    StringBuffer_delete(rhs);
@@ -2031,8 +2040,27 @@ char* ProcessCode(const Proto * f, int indent)
          StringBuffer_prune(str);
       }
 
+      Statement* lastStmt = (Statement*)LastItem(&(F->statements));
+      if (lastStmt && lastStmt->newLocalTable) {
+         int bp = 42;
+      }
       TRY(OutputAssignments(F));
 
+      if (o == OP_SETLIST && lastStmt && lastStmt->newLocalTable) {
+         Statement* newStmt = (Statement*)LastItem(&(F->statements));
+         Statement* prevStmt = (Statement*)FindInList(
+            &(F->statements),
+            (ListItemCmpFn)MatchPrevItem,
+            lastStmt
+         );
+         DeleteStatement(lastStmt, NULL);
+         ((ListItem*)prevStmt)->next = newStmt;
+
+         StringBuffer_printf(str, "local %s", newStmt->code);
+         free(newStmt->code);
+         newStmt->code = StringBuffer_getCopy(str);
+         StringBuffer_prune(str);
+      }
    }
    
    if (GetEndifAddr(F, pc+1)) {
