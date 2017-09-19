@@ -1643,7 +1643,10 @@ char* ProcessCode(const Proto * f, int indent)
          }
       case OP_JMP:
          {
-            if (GET_OPCODE(code[pc - 1]) == OP_JMP) {
+            int isPrevJmp = GET_OPCODE(code[pc - 1]) == OP_JMP;
+            int isNextJmp = GET_OPCODE(code[pc + 1]) == OP_JMP;
+
+            if (isPrevJmp) {
                // Empty if/else block
                FlushBoolean(F);
             }
@@ -1669,6 +1672,24 @@ char* ProcessCode(const Proto * f, int indent)
                   RawAddStatement(F, str);
                   free(test);
                }
+            } else if (sbc == 0 && isPrevJmp && GETARG_sBx(code[pc - 1]) == 1) {
+               F->indent--;
+               StringBuffer_set(str, "else");
+               RawAddStatement(F, str);
+               StringBuffer_set(str, "end");
+               RawAddStatement(F, str);
+               StringBuffer_prune(str);
+
+               GetEndifAddr(F, F->nextEndif->addr);
+            } else if (sbc == 1 && isNextJmp && GETARG_sBx(code[pc + 1]) == 0) {
+               F->indent--;
+               StringBuffer_set(str, "else");
+               RawAddStatement(F, str);
+               StringBuffer_set(str, "end");
+               RawAddStatement(F, str);
+               StringBuffer_prune(str);
+
+               GetEndifAddr(F, F->nextEndif->addr);
             } else if (GET_OPCODE(idest) == OP_FORLOOP) {
                /*
                 * numeric 'for' 
