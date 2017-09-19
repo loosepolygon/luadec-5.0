@@ -1825,7 +1825,7 @@ char* ProcessCode(const Proto * f, int indent)
       case OP_LT:
       case OP_LE:
          {
-            if (IS_CONSTANT(b)) {
+            if (IS_CONSTANT(b) && o != OP_EQ) {
                int swap = b;
                b = c;
                c = swap;
