@@ -1,0 +1,6 @@
+# basically every file in the Luadec project folder has different indent styles because fuck
+
+root = true
+[*]
+indent_size = 3
+indent_style = tab
