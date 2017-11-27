@@ -1690,7 +1690,16 @@ char* ProcessCode(const Proto * f, int indent)
                StringBuffer_prune(str);
 
                GetEndifAddr(F, F->nextEndif->addr);
-            } else if (GET_OPCODE(idest) == OP_FORLOOP) {
+            } else if (GetEndifAddr(F, pc + 2)) {
+					if (F->elseWritten) {
+						F->indent--;
+						StringBuffer_printf(str, "end");
+						TRY(AddStatement(F, str));
+					}
+					F->indent--;
+					F->elsePending = dest;
+					F->elseStart = pc + 2;
+				} else if (GET_OPCODE(idest) == OP_FORLOOP) {
                /*
                 * numeric 'for' 
                 */
@@ -1743,15 +1752,6 @@ char* ProcessCode(const Proto * f, int indent)
                F->internal[a + 2] = 1;
                TRY(AddStatement(F, str));
                F->indent++;
-            } else if (GetEndifAddr(F, pc + 2)) {
-               if (F->elseWritten) {
-                  F->indent--;
-                  StringBuffer_printf(str, "end");
-                  TRY(AddStatement(F, str));
-               }
-               F->indent--;
-               F->elsePending = dest;
-               F->elseStart = pc + 2;
             } else if (PeekSet(F->whiles, pc)) {
                StringBuffer_printf(str, "while 1 do");
                TRY(AddStatement(F, str));
