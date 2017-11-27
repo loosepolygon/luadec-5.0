@@ -1071,7 +1071,7 @@ void DeclareLocals(Function * F)
 				 (ListItemCmpFn)MatchTable,
 				 &r
 			 );
-			 if (tbl->arraySize-1 > 0 || tbl->keyedSize-1 > 0) {
+			 if (tbl->arraySize > 0 || tbl->keyedSize > 0) {
 				 waitTable = 1;
 			 }
 		 }

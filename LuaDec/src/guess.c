@@ -335,7 +335,16 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 				loadregto = f->maxstacksize;
 			} else {
 				loadreg = a;
-				loadregto = a+b-1;
+				loadregto = a + b - 1;
+
+				// Skip the next return call or else it will cause extraneous reg usage numbers to the
+				// top of the stack.
+				if (GET_OPCODE(f->code[pc + 1]) == OP_RETURN) {
+					int nextB = GETARG_B(f->code[pc + 1]);
+					if (nextB == 0) {
+						ignoreNext++;
+					}
+				}
 			}
 			break;
 		case OP_SELF:
@@ -375,8 +384,33 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			}
 			break;
 		case OP_SETLIST:
-			loadreg = a + 1;
-			loadregto = a + 1 + bc % LFIELDS_PER_FLUSH;
+			// loadreg = a + 1;
+			// loadregto = a + 1 + bc % LFIELDS_PER_FLUSH;
+
+			setreg = a;
+
+			for (i = a; i < f->maxstacksize; ++i) {
+				// The local was declared at the OP_NEWTABLE instruction
+				if (i > a) {
+					regassign[i] = 0;
+					regblock[i] = 0;
+				}
+				regusage[i] = 0;
+
+				for (i2 = f->numparams; i2 < localList.size; ++i2) {
+					if (localList.values[i2].reg == i) {
+						LocalDataArray_Pop(&localList);
+						--i2;
+					}
+				}
+			}
+
+			// Don't reset the startpc
+			regusage[a] = 1000;
+
+			if (lastfree > a) {
+				lastfree = a;
+			}
 
 			break;
 		case OP_SETLISTO:
@@ -385,51 +419,29 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 
 			break;
 		case OP_FORLOOP:
-		case OP_TFORLOOP:
-			break;
-		// TODO: OP_TFORPREP
-		//case OP_FORPREP:
-		//	loadreg = a;
-		//	loadregto = a+2;
-		//	setreg = a;
-		//	setregto = a+3;
-		//	intlocfrom = a;
-		//	intlocto = a+3;
-		//	regassign[a] = pc;
-		//	regassign[a+1] = pc;
-		//	regassign[a+2] = pc;
-		//	regassign[a+3] = pc+1;
-		//	regblock[a] = dest;
-		//	regblock[a+1] = dest;
-		//	regblock[a+2] = dest;
-		//	regblock[a+3] = dest-1;
+			addi(blocklist, pc + 1);
 
-		//	addi(blocklist, dest-1);
-		//	if (GET_OPCODE(f->code[dest-2])==OP_JMP) {
-		//		last(blocklist)--;
-		//	}
-		//	break;
+			break;
+		case OP_TFORLOOP:
+		case OP_TFORPREP:
+			break; // TODO
 		case OP_JMP:
-			//if (GET_OPCODE(f->code[dest-1]) == LUADEC_TFORLOOP) {
-			//	int a = GETARG_A(f->code[dest-1]);
-			//	int c = GETARG_C(f->code[dest-1]);
-			//	setreg = a;
-			//	setregto = a+c+2;
-			//	loadreg = a;
-			//	loadregto = a+2;
-			//	intlocfrom = a;
-			//	intlocto = a+c+2;
-			//	regassign[a] = pc;
-			//	regassign[a+1] = pc;
-			//	regassign[a+2] = pc;
-			//	regblock[a] = dest+1;
-			//	regblock[a+1] = dest+1;
-			//	regblock[a+2] = dest+1;
-			//	for (x=a+3;x<=a+c+2;x++) {
-			//		regassign[x] = pc+1;
-			//		regblock[x] = dest-1;
-			//	}
-			//}
+			if (GET_OPCODE(f->code[dest-1]) == OP_FORLOOP) {
+				int a = GETARG_A(f->code[dest-1]);
+				setreg = a;
+				setregto = a+2;
+				loadreg = a;
+				loadregto = a+2;
+				intlocfrom = a;
+				intlocto = a+2;
+				regassign[a] = pc+1;
+				regassign[a+1] = pc+1;
+				regassign[a+2] = pc+1;
+				regblock[a] = dest-1;
+				regblock[a+1] = dest-1;
+				regblock[a+2] = dest-1;
+			}
+
 			if (dest>pc) {
 				addi(blocklist, dest-1);
 				// This is true for an if/else statement
@@ -442,6 +454,10 @@ int luaU_guess_locals(lua_State* luaState, Proto* f, int main) {
 			break;
 		case OP_CLOSURE:
 			setreg = a;
+
+         // Not sure about this
+         intlocfrom = a - 1;
+         intlocto = a - 1;
 
 			++currentClosureIndex;
 			Proto* f2 = f->p[currentClosureIndex];

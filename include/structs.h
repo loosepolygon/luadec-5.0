@@ -43,7 +43,7 @@ typedef struct LocalData_ LocalData;
 struct LocalData_ {
 	int startpc;
 	int endpc;
-	// Used for closure upvalues
+	// Used for closure upvalues and also setlist
 	int reg;
 	char name[20];
 };
