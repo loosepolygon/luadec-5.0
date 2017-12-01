@@ -62,13 +62,14 @@ char *DecompileString(const Proto * f, int n)
             ret[p++] = '\\';
             break;
         default:
-            if (*s < 32 || *s > 127) {
-               char* pos = &(ret[p]);
-               sprintf(pos, "\\%d", *s);
-               p += strlen(pos);
-            } else {
-               ret[p++] = *s;
-            }
+            //if (*s < 32 || *s > 127) {
+            //   char* pos = &(ret[p]);
+            //   sprintf(pos, "\\%d", *s);
+            //   p += strlen(pos);
+            //} else {
+            //   ret[p++] = *s;
+            //}
+            ret[p++] = *s;
             break;
         }
     }
